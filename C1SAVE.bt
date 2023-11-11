@@ -1,0 +1,173 @@
+//------------------------------------------------
+//--- 010 Editor v10.0.2 Binary Template
+//
+//       File: C1SAVE.bt
+//    Authors: Bernard "Toshiba-3" Boonen
+//    Version: 0.1
+//    Purpose: Parse Carmageddon 1 savefile
+//   Category: Game file
+//  Reference: https://github.com/dethrace-labs/dethrace/blob/8051ca2b6d3e060321407c69a65f92548bfe68e0/src/DETHRACE/dr_types.h#L2022
+//------------------------------------------------
+
+LittleEndian();
+
+// Just making a few checks regarding file integrity
+if( FileSize() != 948 ){
+    Printf( "Savefile mismatch (should be 948 bytes)!\n" );
+    Warning("Savefile mismatch (should be 948 bytes)! Template stopped.");
+    return;
+}
+if( ReadUInt64(0) == 0x00 ) Printf( "Empty slot name..? Weird.\n" );
+if( ReadUInt(12) != 0x00000000 ) Printf( "Oi! Slot name too long (12 char maximum). Might corrupt car filename.\n" );
+if( ReadUByte(45) != 0x00 ) Printf( "Name as Max too long (13 char maximum). Might corrupt Die name.\n" );
+if( ReadUByte(59) != 0x00 ) Printf( "Name as Die too long (13 char maximum). Might corrupt first race info.\n" );
+if( ReadUInt(652) == 0x00000000 || ReadUInt(652) == 0x00000010 ){
+    Printf( "Suspiciously specific value for credits... Add-on cars might have corrupted the savefile!\n" );
+    Warning("Suspiciously specific value for credits... Add-on cars might have corrupted the savefile!");
+}
+
+
+
+//////////////////////////////////////////////////
+//  TYPEDEFS /////////////////////////////////////
+//////////////////////////////////////////////////
+//////////////////////////////////////////////////
+
+typedef unsigned long tU32;
+
+typedef struct {
+    // Number of times the race has been completed.
+    // Helps the game suggest least played levels.
+    tU32	been_there_done_that;
+} tRace_save_info;
+
+typedef enum <uint32> {
+    not_dead,
+	dead
+} tOpponent_save_info;
+
+typedef enum <uint32> {
+    NOT_COMPLETED,
+    COMPLETED
+} game_completeness <name="game_completeness">;
+
+typedef enum <uint32> {
+    EASY    = 0x00,
+    MEDIUM  = 0x01,
+    HARD    = 0x02
+} skill_levels <name="skill_levels">;
+
+typedef enum <uint32> {
+    FRANK_AS_MAX = 0x00,
+    ANNIE_AS_DIE = 0x01
+} frank_or_anniness <name="frank_or_anniness">;
+
+typedef tU32 power_up_levels[3];
+
+
+
+//////////////////////////////////////////////////
+//  DEFINING THE FILE ////////////////////////////
+//////////////////////////////////////////////////
+//////////////////////////////////////////////////
+
+char	slot_name[16] <name="slot_name", bgcolor=cAqua>,   // Actual name is 12 char max (there should be 4 null bytes)
+        car_name[16] <name="car_name", bgcolor=cDkGreen>,
+        player_name0[14] <name="player_name (if Max)", bgcolor=cGreen>,   // 13 char max (+1 null byte)
+        player_name1[14] <name="player_name (if Die)", bgcolor=cLtGreen>;
+
+// C1 defines the maximum number of races to 100.
+// Might corrupt the save file if more than 100 races are installed?
+tRace_save_info race_info[100] <name="race_info", read=setRaceInfo>;  // whether each race was completed, and how many times.
+
+// C1 sets 60 here and there as the maximum available cars.
+// It is confirmed that having more than 48 cars installed
+// makes the game overwrite the data following the opponent_info block.
+tOpponent_save_info	opponent_info[48] <name="opponent_info">;  // whether each car is dead/beaten/owned
+
+BigEndian();
+
+tU32    // $$$
+        // FYI initial credits for each skill level: 7500,5000,3000
+        credits <name="credits", bgcolor=cGreen>,
+
+        // should read 99 for a fresh savegame
+        rank <name="rank", bgcolor=cGreen>;
+
+        // 0 = easy, 1 = medium, 2 = hard
+skill_levels skill_level <name="skill_level", bgcolor=cGreen>;
+
+        // if this is set to 1, then all races and cars are available
+game_completeness game_completed <name="game_completed", bgcolor=cGreen>;
+
+        // number of cars available to the player 
+tU32    number_of_cars <name="number_of_cars", bgcolor=cDkGreen>,
+
+        // as said earlier, C1 max cars available = 60. This list the indices of each available car.
+        cars_available[60] <name="cars_available">,
+
+        // index according to OPPONENT.TXT
+        current_car_index <name="current_car_index", read=setCarIndex, bgcolor=cGreen>,
+
+        // index according to RACES.TXT
+        current_race_index <name="current_race_index", read=setRaceIndex, bgcolor=cGreen>,
+
+        // no sure what this is supposed to be!
+        // it seems like this race index is set if you lose the last race
+        // effectively marking a race you have to redo..?
+        redo_race_index <name="redo_race_index", read=setRaceRedoing, bgcolor=cGreen>;
+
+        // are you a boy or a girl..?
+frank_or_anniness frank_or_annitude <name="frank_or_annitude", bgcolor=cGreen>;
+
+        // APO levels - between 0 and 5
+power_up_levels current_apo <name="power_up_levels", read=setAPOLevels, bgcolor=cDkGreen>;
+
+tU32    version <name="version", read=setVersion>,   // always 6
+
+        // use SaveSum after editing the rest of the file to correct the checksum
+        checksum <format=hex, name="checksum", bgcolor=cAqua>;
+
+
+
+//////////////////////////////////////////////////
+//  CUSTOMISING THE VALUE LABELS /////////////////
+//////////////////////////////////////////////////
+//////////////////////////////////////////////////
+
+string setRaceInfo(tRace_save_info &race_info){
+    if (race_info.been_there_done_that == 0) return "not completed yet";
+    else{
+        string info;
+        SPrintf( info, "completed  %d  time(s)", race_info.been_there_done_that );
+        return info;
+    }
+}
+string setCarIndex(tU32 current_car_index){
+    string c;
+    SPrintf( c, "#%d  (in OPPONENT.TXT)", (current_car_index) );
+    return c;
+}
+string setRaceIndex(tU32 current_race_index){
+    string r;
+    SPrintf( r, "#%d  (in RACES.TXT)", (current_race_index) );
+    return r;
+}
+string setRaceRedoing(tU32 redo_race_index){
+    string r2;
+    if (redo_race_index == 0xFFFFFFFF) SPrintf( r2, "UNSET (-1)" );
+    else SPrintf( r2, "#%d  (also in RACES.TXT)", (redo_race_index) );
+    return r2;
+}
+string setAPOLevels(power_up_levels &powerUpLevels){
+    string apo;
+    SPrintf( apo, "A=%d, P=%d, O=%d  (Levels 1-6)", powerUpLevels[0]+1, powerUpLevels[1]+1, powerUpLevels[2]+1 );
+    return apo;
+}
+string setVersion(tU32 version){
+    string v;
+    SPrintf( v, "V%d", (version) );
+    return v;
+}
+
+// Wraith awaiting launch orders

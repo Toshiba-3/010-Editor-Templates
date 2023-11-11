@@ -1,0 +1,642 @@
+//------------------------------------------------
+//--- 010 Editor v10.0.2 Binary Template
+//
+//      File: BRender.bt
+//   Authors: Bernard "Toshiba-3" Boonen
+//   Version: v0.2
+//   Purpose: Parse BRender files ACT,DAT,MAT,PIX
+//  ID Bytes: 00 00 00 12 00 00 00 08
+//------------------------------------------------
+
+BigEndian();
+local int i = 0;
+local int pos = 0;
+local int test = 0;
+local int nulls = 0;
+local int error = 0;
+local int eofReached = 0;
+local int masterChunk = 0;
+
+
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+// TYPEDEFS
+
+// using enums combined with a bitfield.
+// actually one uint16 according to the BRender source
+// and not two uchar as shown below.
+typedef struct {
+    uchar unknownFlag;
+    enum <uchar> flag1 { NONE_1, BR_MODF_PREPREPARED } var : 2;
+    enum <uchar> flag2 { NONE_2, BR_MODF_CUSTOM } var : 1;
+    enum <uchar> flag3 { NONE_3, BR_MODF_QUICK_UPDATE } var : 1;
+    enum <uchar> flag4 { NONE_4, BR_MODF_GENERATE_TAGS } var : 2;
+    enum <uchar> flag5 { NONE_5, BR_MODF_KEEP_ORIGINAL } var : 1;
+    enum <uchar> flag6 { NONE_6, BR_MODF_DONT_WELD } var : 1;
+} br_model_flags <name="br_model_flags">;
+
+// enum used for file types
+typedef enum <int> {
+    no_type      = 0x00,
+    actors       = 0x01,
+    pixelmap     = 0x02,
+    light        = 0x03,
+    camera       = 0x04,
+    old_material = 0x05,
+    material     = 0x06,
+    model        = 0xFACE,
+    animation    = 0x0A11,
+    tree         = 0x5EED
+} file_type <name="File type">;
+
+// enum used for chunk types
+typedef enum <uint> {
+	end_null_padding        = 0x00,
+	image_plane			    = 0x01,	// UNUSED
+	RLE_image_place		    = 0x02,	// UNUSED
+	old_pixelmap            = 0x03,
+	oldest_material         = 0x04,
+	add_material		    = 0x05,	// UNUSED
+	old_actor			    = 0x06,	// UNUSED
+	old_add_sibling		    = 0x07,	// UNUSED
+	old_add_child		    = 0x08,	// UNUSED
+	old_material_index      = 0x09,
+	old_vertices            = 0x0A,
+	old_vertices_uv         = 0x0B,
+	oldest_faces            = 0x0C,
+	oldest_model            = 0x0D,
+	add_model               = 0x0E,
+	animation_              = 0x0F,
+	anim_transformation     = 0x10,
+	anim_rate               = 0x11,
+	file_info               = 0x12,
+	oldest_light		    = 0x13,	// UNUSED
+	old_camera			    = 0x14,	// UNUSED
+	pivot                   = 0x15,
+	material_index          = 0x16,
+	vertices                = 0x17,
+	vertex_uv               = 0x18,
+	old_faces               = 0x19,
+	face_material           = 0x1A,
+	older_model             = 0x1B,
+	colour_map_ref          = 0x1C,
+	opacity_map_ref		    = 0x1D,	// UNUSED
+	indexed_blend_table_ref = 0x1E,
+	indexed_shade_table_ref = 0x1F,
+	screendoor_ref          = 0x20,
+	pixels                  = 0x21,
+	add_map                 = 0x22,
+	actor_                  = 0x23,
+	actor_model             = 0x24,
+	actor_transform         = 0x25,
+	actor_material          = 0x26,
+	actor_light             = 0x27,
+	actor_camera            = 0x28,
+	actor_bounds            = 0x29,
+	actor_add_child         = 0x2A,
+	transform_matrix34      = 0x2B,
+	transform_matrix34_lp   = 0x2C,
+	transform_quaternion    = 0x2D,
+	transform_euler         = 0x2E,
+	transform_look_up       = 0x2F,
+	transform_translation   = 0x30,
+	transform_identity      = 0x31,
+	bounds                  = 0x32,
+	old_light               = 0x33,
+	camera_                 = 0x34,
+	faces                   = 0x35,
+	old_model               = 0x36,
+	actor_clip_plane        = 0x37,
+	plane                   = 0x38,
+	saturn_faces            = 0x39,
+	saturn_model            = 0x3A,
+	indexed_fog_table_ref   = 0x3B,
+	old_material_           = 0x3C,
+	pixelmap_               = 0x3D,
+	material_               = 0x3E,
+	light_                  = 0x3F,
+	model_                  = 0x40,
+	vertex_colour           = 0x41,
+	vertex_normal           = 0x42,
+	face_colour             = 0x43,
+	face_equation           = 0x44
+} chunk_type <name="Chunk type">;
+
+// enum used for pixel type formats
+typedef enum <uchar> { 
+	BR_PMT_INDEX_1        = 0x00,
+	BR_PMT_INDEX_2        = 0x01,
+	BR_PMT_INDEX_4        = 0x02,
+// Each pixel is an index into a colour map
+	BR_PMT_INDEX_8        = 0x03,
+// True colour RGB
+	BR_PMT_RGB_555        = 0x04,	// 16 bits per pixel
+	BR_PMT_RGB_565        = 0x05,	// 16 bits per pixel
+	BR_PMT_RGB_888        = 0x06,	// 24 bits per pixel
+	BR_PMT_RGBX_888       = 0x07,	// 32 bits per pixel
+	BR_PMT_RGBA_8888      = 0x08,	// 32 bits per pixel
+// YUV
+	BR_PMT_YUYV_8888      = 0x09,	// YU YV YU YV ...
+	BR_PMT_YUV_888        = 0x0A,
+// Depth
+	BR_PMT_DEPTH_16       = 0x0B,
+	BR_PMT_DEPTH_32       = 0x0C,
+// Opacity
+	BR_PMT_ALPHA_8        = 0x0D,
+// Opacity + Index.
+	BR_PMT_INDEXA_88      = 0x0E,
+// Bump maps
+	BR_PMT_NORMAL_INDEX_8 = 0x0F,
+	BR_PMT_NORMAL_XYZ     = 0x10,
+// Wrong way around 15 bit true colour
+	BR_PMT_BGR_555        = 0x11,
+// 16 bit r,g,b & alpha
+	BR_PMT_RGBA_4444      = 0x12,
+// Handy types for converting to 15/16 bit
+	BR_PMT_RBG_bab        = 0x13,
+	BR_PMT_RBG_1aba       = 0x14,
+// Pixelmap extensions.
+	BR_PMT_RGB_332        = 0x15,
+	BR_PMT_DEPTH_8        = 0x16,
+	BR_PMT_ARGB_8888      = 0x17,
+	BR_PMT_ALPHA_4        = 0x18,
+	BR_PMT_INDEXA_44      = 0x19,
+	BR_PMT_DEPTH_15       = 0x1A,
+	BR_PMT_DEPTH_31       = 0x1B,
+	BR_PMT_DEPTH_FP16     = 0x1C,
+	BR_PMT_DEPTH_FP15     = 0x1D,
+	BR_PMT_RGBA_5551      = 0x1E,
+	BR_PMT_ARGB_1555      = 0x1F,
+	BR_PMT_ARGB_4444      = 0x20,
+	BR_PMT_MAX		      = 0x21
+} pixelmap_type <name="Pixel type">;
+
+typedef uint chunk_length <name="Chunk length in bytes">;
+
+typedef float br_scalar <name="br_scalar">;
+
+typedef struct {
+// br_vector2
+    br_scalar x;
+    br_scalar y;
+} br_vector2 <name="br_vector2">;
+
+typedef struct {
+// br_vector3
+    br_scalar x;
+    br_scalar y;
+    br_scalar z;
+} br_vector3 <name="br_vector3">;
+
+typedef struct {
+    for( i = 0; i < vertexCount; i++ )
+        br_vector3 p;
+    i = 0;
+} verticesLot <name="All the vertices">;
+ 
+typedef struct {
+    if( uvChunkType == 0x0B ){
+        for( i = 0; i < (chunkUVcoordsSize/20); i++ ){ // Dividing the chunk size by the size of each entry (5*4 bytes)
+            br_vector3 p;
+            br_vector2 map; }
+    }else{ for( i = 0; i < tvertexCount; i++ ) br_vector2 map; }
+    i = 0;
+} tverticesLot <name="All the UV coords">;
+
+typedef struct {
+    if( faceChunkType != 0x39 ) uint16 vertex[3];
+    switch( faceChunkType ){
+        case 0x0C : uint16 old_material_id; uint32 smoothing_group; break;
+        case 0x19 : uchar smoothing_group; uchar coplanar_flag; break;
+        case 0x35 : uint16 smoothing_group; uchar coplanar_flag; break;
+        case 0x39 : uint16 svert1;      // Saturn geometry is quad-based so faces are made of 4 vertices.
+                    uint16 svert2;      // If a triangle is needed, the same vertice can be listed twice.
+                    uint16 svert3;
+                    uint16 svert4;
+                    uint16 ssmooth;      // known values are 1,2,4,8,16,65535... probably smoothing groups?
+                    uint16 sfacenum;    // incremental face number. Keeps incrementing through consecutive models.
+                    uchar sflags;     // always 0, probably flags (coplanar + quad based mapping texture orientation)
+                    break; }
+} face <read=saturnFaceSpecs>;
+// Writes the saturn face details in each face entry (only for Saturn faces)
+string saturnFaceSpecs( face &saturnFaceEntry ) {
+    if( exists( saturnFaceEntry.svert1 ) ){
+        string sf;
+        SPrintf( sf, "Face #%d, vertices %d,%d,%d,%d. [%d] [%d]", (saturnFaceEntry.sfacenum), (saturnFaceEntry.svert1), (saturnFaceEntry.svert2), (saturnFaceEntry.svert3), (saturnFaceEntry.svert4), (saturnFaceEntry.ssmooth), (saturnFaceEntry.sflags) );
+        return sf;
+    }else return "";
+}
+
+typedef struct {
+    string matName;
+} material;
+
+typedef struct {
+    if( faceChunkType == 0x0C ){
+        for( i = 0; i < (chunkFaceDataSize/12); i++ ){ // Dividing the chunk size by the size of each entry (12 bytes)
+            face f <name="face">; }
+    }else{ for( i = 0; i < faceCount; i++ ) face f <name="face">; }
+    i = 0;
+} facesLot <name="All the faces">;
+
+typedef struct {
+    for( i = 0; i < materialCount; i++ )
+    material mat <name="material",read=GetMaterialName>;
+    i = 0;
+} materialList <name="Material list">;
+// Writes the material name in Value
+string GetMaterialName( material &materialEntry ) {
+    if( exists( materialEntry.matName ) ) return materialEntry.matName;
+    else return "";
+}
+
+typedef struct {
+    for( i = 0; i < faceidCount; i++ )
+    uint16 faceid;
+    i = 0;
+} faceidList <name="FaceID list">;
+
+typedef struct {
+    chunk_type pivotChunkType <format=hex,bgcolor=cYellow>; // 0x15
+    chunk_length chunkPivotSize;
+    br_vector3 pivot;
+} br_pivot <name="br_pivot",read=getPivotCoord>;
+// Writes the pivot coordinate in Value
+string getPivotCoord( br_pivot &pivotEntry ) {
+    string pvt;
+    SPrintf( pvt, "%f, %f, %f", pivotEntry.pivot.x, pivotEntry.pivot.y, pivotEntry.pivot.z );
+    return pvt;
+}
+
+typedef struct {
+    chunk_type vertexChunkType <format=hex,bgcolor=cYellow>; // 0x17
+    chunk_length chunkVertexDataSize;
+    uint vertexCount <name="Vertex Count">;
+    verticesLot v;
+} br_vertex <name="br_vertex">;
+
+typedef struct {
+    chunk_type uvChunkType <format=hex,bgcolor=cYellow>;    // 0x0B or 0x18 - 0x0B is actually vertex + uv !!
+    chunk_length chunkUVcoordsSize;
+    if( uvChunkType == 0x18 ) uint tvertexCount <name="UV Vertex Count">; // no vertex+uv count in 0x0B
+    tverticesLot t;
+} br_tvertex <name="br_tvertex",read=getOldTVertexCount>;
+// Writes the material name in Value
+string getOldTVertexCount( br_tvertex &oldTVertexEntry ) {
+    if( oldTVertexEntry.uvChunkType == 0x0B ){
+        string uv;
+        SPrintf( uv, "%d vertices (+UV for each)", (oldTVertexEntry.chunkUVcoordsSize/20) );
+        return uv;
+    }else return "";
+}
+
+typedef struct {
+    chunk_type faceChunkType <format=hex,bgcolor=cYellow>; // 0x0C, 0x19, 0x35, 0x39
+    chunk_length chunkFaceDataSize;
+    if( faceChunkType == 0x19 || faceChunkType == 0x35 || faceChunkType == 0x39 ) uint faceCount <name="Face count">;
+    facesLot fs;
+} br_face <name="br_face",read=getOldFaceCount>;
+// Writes the material name in Value
+string getOldFaceCount( br_face &oldFaceEntry ) {
+    if( oldFaceEntry.faceChunkType == 0x0C ){
+        string oldfaces;
+        SPrintf( oldfaces, "%d faces", (oldFaceEntry.chunkFaceDataSize/12) );
+        return oldfaces;
+    }else return "";
+}
+
+typedef struct {
+    chunk_type materialChunkType <format=hex,bgcolor=cYellow>; // 0x09 or 0x16
+    chunk_length chunkMaterialDataSize; // Don't trust this too much
+    if( materialChunkType == 0x09){ string oldMatName <name="material">; }
+    else{
+        uint materialCount <name="Material Count">;
+        materialList ml;
+    }
+} br_material <name="br_material",read=getOldMaterialName>;
+// Writes the material name in Value
+string getOldMaterialName( br_material &oldMaterialEntry ) {
+    if( oldMaterialEntry.materialChunkType==0x09 && exists( oldMaterialEntry.oldMatName ) ) return oldMaterialEntry.oldMatName;
+    else return "";
+}
+
+typedef struct {
+    chunk_type faceidChunkType <format=hex,bgcolor=cYellow>; // 0x1A
+    chunk_length chunkFaceIDDataSize;
+    uint faceidCount <name="Face Material ID Count">;
+    uint uint16length <name="Bytes per FaceID">; // I suppose this is "bytes per FaceID", always '2'
+    faceidList fl;
+} br_faceid <name="br_faceid">;
+
+////////////////////////////////////////////////////////////////////////////////
+// MODELS.
+typedef struct {
+    chunk_type modelChunkType <format=hex,bgcolor=cBlue>; // 0x40, 0x3A, 0x36, 0x1B, or 0x0D
+    if( modelChunkType == 0x0D || modelChunkType == 0x1B )
+        Printf( "Oi, uncommon older model chunktype!\n" );
+    chunk_length chunkModelHeaderSize; // Don't trust this too much
+    if( modelChunkType == 0x36 || modelChunkType == 0x3A )
+        br_model_flags modelFlags; // Flags describing what is allowed in ModelPrepare()
+    string modelName <name="Model identifier">;
+    if( modelChunkType != 0x0D ){
+        ChunkOut();
+        masterChunk = 0; }
+} br_model <name=NameThisModelPlease,read=ReadThisModelPlease>;
+// Custom name function to display the model version
+string NameThisModelPlease( br_model &modelEntry ) {
+    if( modelEntry.modelChunkType == 0x0D ) return "Model (oldest)";
+    if( modelEntry.modelChunkType == 0x1B ) return "Model (older)";
+    if( modelEntry.modelChunkType == 0x36 ) return "Model (old)";
+    if( modelEntry.modelChunkType == 0x3A ) return "Model (saturn)";
+    if( modelEntry.modelChunkType == 0x40 ) return "Model (last)";
+}
+// Custom read function to display the model name next to the model entry.
+string ReadThisModelPlease( br_model &modelEntry ) {
+    if( modelEntry.modelChunkType == 0x0D ) return modelEntry.modelName;
+    else{
+        string s;
+        if( modelEntry.modelName == "" )
+            SPrintf( s, "[no identifier] (%d vertices, %d faces)", modelEntry.vertexData.vertexCount, modelEntry.faceData.faceCount );
+        else SPrintf( s, "%s (%d vertices, %d faces)", modelEntry.modelName, modelEntry.vertexData.vertexCount, modelEntry.faceData.faceCount );
+        return s;
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// PIXELMAPS.
+typedef struct {
+    chunk_type pixelmapChunkType <format=hex,bgcolor=cBlue>; // 0x03 or 0x3D
+    chunk_length chunkPixelmapHeaderSize; // Don't trust this too much
+    pixelmap_type type;
+    uint16 rowBytes <name="Row bytes">;
+    uint16 width <name="Width in pixels">;
+    uint16 height <name="Height in pixels">;
+    uint16 originX <name="Origin X">;
+    uint16 originY <name="Origin Y">;
+    if( pixelmapChunkType == 0x3D )
+        uint16 mipOffset <name="Mip offset">;
+    string pixelmapName <name="Pixelmap identifier">;
+    ChunkOut();
+    masterChunk = 0;
+} br_pixelmap <name=NamePixelmap,read=ReadThisPixelmapPlease>;
+// Custom name function to display the pixelmap version
+string NamePixelmap( br_pixelmap &br_pixelmapEntry ) {
+    if( br_pixelmapEntry.pixelmapChunkType == 0x03 ) return "Pixelmap (old)";
+    if( br_pixelmapEntry.pixelmapChunkType == 0x3D ) return "Pixelmap";
+}
+// Custom read function to display the pixelmap name next to the pixelmap entry.
+string ReadThisPixelmapPlease( br_pixelmap &pixelmapEntry ) {
+    string s;
+    if( pixelmapEntry.pixelmapName == "" )
+        SPrintf( s, "[no identifier] (%d*%d), %s", pixelmapEntry.width, pixelmapEntry.height, EnumToString(pixelmapEntry.type) );
+    else SPrintf( s, "%s (%d*%d), %s", pixelmapEntry.pixelmapName, pixelmapEntry.width, pixelmapEntry.height, EnumToString(pixelmapEntry.type) );
+    return s;
+}
+
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+// FUNCTIONS
+//
+////////////////////////////////////////////////////////////////////////////////
+// The following loops until the EOF and structures the data according to
+// the chunktype read at the start and after each chunk is done
+void ChunkOut()
+{
+    test = 1;
+    while( (FEof() != true) && (error != 1) && (test != 0) )
+    {
+        test = ReadInt( FTell() );
+        switch( test )
+        {
+            // old pixelmap
+            case 0x03   :   masterChunk = 1; br_pixelmap pixelmap <bgcolor=cLtBlue>; break;
+            // old material index
+            case 0x09   :   br_material materialData; break;
+            // old vertices uv
+            case 0x0B   :   br_tvertex tvertexData; break;
+            // oldest faces
+            case 0x0C   :   br_face faceData; break;
+            // oldest model
+            case 0x0D   :   br_model model <bgcolor=cLtBlue>; break;
+            // file info (shouldn't be found elsewhere than as the file header)
+            case 0x12   :   Printf( "Another file info chunk (0x12)?! What's going on??\n" ); error = 1; break;
+            // pivot
+            case 0x15   :   br_pivot pivotData; break;
+            // material index
+            case 0x16   :   br_material materialData; break;
+            // vertices
+            case 0x17   :   br_vertex vertexData; break;
+            // vertex uv
+            case 0x18   :   br_tvertex tvertexData; break;
+            // old faces
+            case 0x19   :   br_face faceData; break;
+            // pixels
+            case 0x21   :   Printf( "Chunktype 0x21 (pixels) not supported yet!\n" ); error = 1; break;
+            // face material
+            case 0x1A   :   br_faceid faceidData; break;
+            // older model
+            case 0x1B   :   masterChunk = 1; br_model model <bgcolor=cLtBlue>; break;
+            // faces
+            case 0x35   :   br_face faceData; break;
+            // old model
+            case 0x36   :   masterChunk = 1; br_model model <bgcolor=cLtBlue>; break;
+            // saturn faces
+            case 0x39   :   br_face faceData; break;
+            // saturn model
+            case 0x3A   :   masterChunk = 1; br_model model <bgcolor=cLtBlue>; break;
+            // pixelmap
+            case 0x3D   :   masterChunk = 1; br_pixelmap pixelmap <bgcolor=cLtBlue>; break;
+            // unknown datatype
+            default     :   Printf( "Aroogah! Corrupted file or unknown chunk type detected!\n" ); error = 1; break;
+        }
+        // if the last tiptoe checked the end of file, no need to do the following again.
+        if( eofReached == 1 ) break;
+        // This code checks every time for malformed/missing null padding
+        TipToe();
+        // should not be any padding but just checking
+        if( (nulls == 3) && (eofReached != 1) )
+        {
+            // checking if the masterChunk is properly padded before starting a new one
+            if( (masterChunk == 1) && (ReadInt( FTell() ) == 0x36) )
+            {
+                Printf( "Wait a minute! No proper padding between master chunks.\n" ); 
+                error = 1;
+            }
+            test = 1;
+        }
+        // this should be a proper end of file
+        else if( (nulls == 8) && (eofReached == 1) )
+        {
+            uint64 null <name="end null padding">;
+            test = 0;
+        }
+        // this should be a proper padding between master chunks
+        else if( (nulls == 11) && (eofReached != 1) )
+        {
+            uint64 null <name="end null padding">;
+            test = 0;
+        }
+        // malformed or missing padding
+        else
+        {
+            Printf( "Hey null padding nucked around here!\n" ); 
+            error = 1;
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Counts null bytes and reports it.
+// Meant to help identify possible malformed end of chunk/file.
+int TipToe()
+{
+    nulls = 0;
+    eofReached = 0;
+    pos = FTell(); // save read position
+    for( i = 0; ReadByte( FTell() ) == 0; i++ )
+    {
+        FSkip(1);
+        if( FEof() )
+        {
+            if( i != 0 ) i++;
+            eofReached = 1;
+            break;
+        }
+    }
+    nulls = i;
+    i = 0;
+    FSeek( pos );  // restore read position
+    return nulls;
+}
+
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////LETSGOOOOOOOOOOOOOOOOOOOOOO//////////
+////////////////////////////////////////////////////////////////////////////////
+// Checking if this is a proper BRender file header
+// and if it is, which filetype and version
+struct FILE_INFO {
+    chunk_type fileInfoChunkID <format=hex>;
+    if( fileInfoChunkID != 0x12 ) // All BRender datafiles are supposed to start with 0x12 !
+    {
+        Printf( "Bad header! Probably not a fucking BRender file, friendo.\nOr then it's malformed.\nOr customized." );
+        return;
+    }
+    chunk_length fileInfoLength;
+    if( fileInfoLength != 0x8 ) // File info chunks are always 8 bytes long...
+    {
+        Printf( "File info chunk length mismatch! Bad look! Trying to read the rest anyway...\n" );
+    }
+    file_type fileType <format=hex, bgcolor=cLtRed, name="File type">;
+    if( (fileType != 0x00)  // No other file types known than those listed
+        && (fileType != 0x01)
+        && (fileType != 0x02)
+        && (fileType != 0x03)
+        && (fileType != 0x04)
+        && (fileType != 0x05)
+        && (fileType != 0x06)
+        && (fileType != 0x0A11)
+        && (fileType != 0xFACE)
+        && (fileType != 0x5EED)
+      )
+    {
+        Printf( "Either a bad header (not a BRender file?) or an unknown BRender file type (impossibru, baka).\n" );
+        return;
+    }
+    int BR_FILE_VERSION <name="File version">;
+    if( (BR_FILE_VERSION != 1) && (BR_FILE_VERSION != 2) ) // Only two known version numbers : 1 and 2
+    {
+        Printf( "Oi. Strange version for a BRender file. Trying to parse nonetheless.\n" );
+    }
+} fileInfo <bgcolor=cRed,name=BRenderHeaderOrNot,read=WhatTypeHeader>;
+
+////////////////////////////////////////////////////////////////////////////////
+// We've determined the filetype, so let's say it and whether this template can
+// handle the file or not. If it does, let's parse the next chunks (ChunkOut)
+if( fileInfo.fileInfoChunkID == 0x12 )
+{
+    switch( fileInfo.fileType )
+    {
+        case 0x0000  :  Printf( "This is a NO-TYPE BRender file. The following data cannot be guessed.\n" );
+                        return;
+        case 0x0001  :  Printf( "We've got a BRender Actor file in the room.\n" );
+                        Printf( "Actor file parsing not implemented yet though.\n" );
+                        return;
+        case 0x0002  :  Printf( "Ok ok, that's a BRender Pixelmap file.\n" );
+                        ChunkOut();
+                        return;
+        case 0x0003  :  Printf( "Heh uh a BRender Light file. Basically an Actor file, amirite?\n" );
+                        return;
+        case 0x0004  :  Printf( "BRender Camera file. Never found one myself, can't support it..!\n" );
+                        return;
+        case 0x0005  :  Printf( "Detecting an Old BRender Material file, captain.\n" );
+                        Printf( "Old Material file parsing not implemented yet though.\n" );
+                        return;
+        case 0x0006  :  Printf( "A BRender Material file, as in, the NEWEST file type. Did you make it yourself ?\n" );
+                        return;
+        case 0xFACE  :  Printf( "It's a BRender Model file, alright.\n" );
+                        if( fileInfo.BR_FILE_VERSION == 1 )
+                        {
+                            Printf( "Also it's fucking old (BRender DAT v.1). Where did you get DAT? " );
+                            Printf( "Attempting EXPERIMENTAL Old Model file parsing...\n" );
+                        }
+                        ChunkOut();
+                        return;
+        case 0x0A11  :  Printf( "Jesus Christ, a BRender Animation file! Couldn't locate one, thus this template doesn't support them.\n" );
+                        return;
+        case 0x5EED  :  Printf( "A. FUCKING. BRENDER. TREE. FILE. I don't even know what these are supposed to be.\n" );
+                        return;
+        default      :  Printf( "I said no.\n" );
+                        return;
+    }
+}
+
+
+
+
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+// Writes the detected filetype in Value
+string WhatTypeHeader( FILE_INFO )
+{
+    string s;
+    if( fileInfo.fileInfoChunkID == 0x12 ) {
+        switch ( fileInfo.fileType ) {
+            case 0x0000  :   SPrintf( s, "No-type file - CAN'T BE PARSED" ); break;
+            case 0x0001  :   SPrintf( s, "Actor file" ); break;
+            case 0x0002  :   SPrintf( s, "Pixelmap file" ); break;
+            case 0x0003  :   SPrintf( s, "Light file - UNSUPPORTED" ); break;
+            case 0x0004  :   SPrintf( s, "Camera file - UNSUPPORTED" ); break;
+            case 0x0005  :   SPrintf( s, "Old Material file" ); break;
+            case 0x0006  :   SPrintf( s, "New Material file - UNSUPPORTED" ); break;
+            case 0xFACE  :   if( fileInfo.BR_FILE_VERSION == 1 ) { SPrintf( s, "Old Model file" ); }
+                             else { SPrintf( s, "Model file" ); }
+                             break;
+            case 0x0A11  :   SPrintf( s, "Animation file - UNSUPPORTED" ); break;
+            case 0x5EED  :   SPrintf( s, "Tree file - UNSUPPORTED" ); break;
+            default      :   SPrintf( s, "no idea, Johnny" ); break; }
+    } else {
+        SPrintf( s, "no idea, Johnny boy" );
+    }
+    return s;
+}
+// Writes the detected header status in Name
+string BRenderHeaderOrNot( FILE_INFO )
+{
+    string t;
+    if( fileInfo.fileInfoChunkID != 0x12 )
+        SPrintf( t, "Not a BRender File" );
+    else
+        SPrintf( t, "BRender File Info" );
+    return t;
+}
+
+// Wraith awaiting launch orders
